@@ -381,6 +381,14 @@ Strix Cloud:
                 "--resume picks up where the prior run left off, including the "
                 "original target list."
             )
+        if args.scope_mode == "diff" or args.diff_base:
+            # Re-resolving a diff mid-run would rebuild the scope the resumed
+            # state was recorded against; only widening to "full" is supported.
+            parser.error(
+                "Cannot combine --resume with --scope-mode diff or --diff-base. "
+                "Start a fresh run to change the diff scope; --scope-mode full "
+                "is honored and widens the resume to the full repository."
+            )
         if not args.resume.strip():
             # A bare --resume: main() opens the inline picker of prior runs
             # before anything launches; headless has nobody to pick, so it
@@ -532,6 +540,22 @@ def load_resume_state(args: argparse.Namespace) -> None:
     persisted_scan_mode = state.get("scan_mode")
     if persisted_scan_mode and args.scan_mode == "deep":
         args.scan_mode = persisted_scan_mode
+    # Same contract as scan_mode above: the persisted scope describes the run
+    # being resumed and wins over the flags' defaults, so the record never
+    # writes a scope_mode next to a diff_scope it contradicts.
+    persisted_scope_mode = state.get("scope_mode")
+    if persisted_scope_mode and args.scope_mode == "auto":
+        args.scope_mode = persisted_scope_mode
+    if state.get("diff_base") and not args.diff_base:
+        args.diff_base = state.get("diff_base")
+    if args.scope_mode == "full":
+        # An explicit --scope-mode full widens the resume to the full
+        # repository, as --help promises; the flag's "auto" default keeps the
+        # intent unambiguous. The persisted instruction carries the diff-scope
+        # preamble, so a widened resume rebuilds it from the clean user text.
+        args.diff_scope = {"active": False, "mode": "full"}
+        if not args.user_explicit_instruction and args.user_instruction:
+            args.instruction = args.user_instruction
     agents_path = runtime_state_dir(run_dir) / "agents.json"
     if not agents_path.exists():
         raise ResumeError(
