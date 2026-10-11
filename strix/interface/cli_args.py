@@ -24,6 +24,15 @@ from strix.report.runs import list_run_summaries
 # Severities ``--fail-on`` accepts, most severe first.
 FAIL_ON_SEVERITIES = ("critical", "high", "medium", "low", "info")
 
+# Injected into a resumed session that was widened past its recorded diff
+# scope, so the diff-scope preamble replayed from the original conversation
+# stops telling the agents to report findings only inside the old diff.
+RESUME_SCOPE_WIDENED_INSTRUCTION = (
+    "The diff scope of the original run has been lifted (--scope-mode full): "
+    "analyze the full repository. Findings are no longer limited to the "
+    "changes listed in the earlier scope instructions."
+)
+
 
 def get_version() -> str:
     try:
@@ -548,14 +557,24 @@ def load_resume_state(args: argparse.Namespace) -> None:
         args.scope_mode = persisted_scope_mode
     if state.get("diff_base") and not args.diff_base:
         args.diff_base = state.get("diff_base")
+    # What reaches the resumed session as a fresh message: the runner injects
+    # scan_config["resume_instruction"], because a replayed session would
+    # otherwise ignore any new instruction entirely.
+    args.resume_instruction = args.user_explicit_instruction or ""
     if args.scope_mode == "full":
         # An explicit --scope-mode full widens the resume to the full
         # repository, as --help promises; the flag's "auto" default keeps the
-        # intent unambiguous. The persisted instruction carries the diff-scope
-        # preamble, so a widened resume rebuilds it from the clean user text.
+        # intent unambiguous.
+        widened = bool(isinstance(args.diff_scope, dict) and args.diff_scope.get("active"))
         args.diff_scope = {"active": False, "mode": "full"}
-        if not args.user_explicit_instruction and args.user_instruction:
-            args.instruction = args.user_instruction
+        if widened and not args.user_explicit_instruction:
+            # The instruction recorded for a diff-scoped run carries the
+            # preamble prepare_run() prepended to it; the widened resume
+            # records the clean user text instead, and injects a note into
+            # the replayed session so the old restriction is lifted for
+            # the agents too, not just in the published record.
+            args.instruction = state.get("user_instruction") or None
+            args.resume_instruction = RESUME_SCOPE_WIDENED_INSTRUCTION
     agents_path = runtime_state_dir(run_dir) / "agents.json"
     if not agents_path.exists():
         raise ResumeError(

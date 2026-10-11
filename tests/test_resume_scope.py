@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from strix.interface.cli_args import RESUME_SCOPE_WIDENED_INSTRUCTION
+
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -78,6 +80,7 @@ def test_resume_restores_persisted_scope_over_flag_defaults(
     assert args.diff_base == "origin/main"
     assert args.diff_scope == {"active": True, "mode": "diff", "repos": []}
     assert args.instruction == PREAMBLE + "find auth bugs"
+    assert args.resume_instruction == ""
 
 
 def test_resume_honors_scope_mode_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,8 +99,10 @@ def test_resume_honors_scope_mode_full(tmp_path: Path, monkeypatch: pytest.Monke
     assert args.scope_mode == "full"
     assert args.diff_scope == {"active": False, "mode": "full"}
     # The recorded instruction carries the diff-scope preamble; the widened
-    # resume keeps only the clean user text.
+    # resume keeps only the clean user text, and injects a note lifting the
+    # old restriction into the replayed session.
     assert args.instruction == "find auth bugs"
+    assert args.resume_instruction == RESUME_SCOPE_WIDENED_INSTRUCTION
 
 
 def test_resume_honors_scope_mode_full_with_new_instruction(
@@ -118,12 +123,13 @@ def test_resume_honors_scope_mode_full_with_new_instruction(
     assert args.scope_mode == "full"
     assert args.diff_scope == {"active": False, "mode": "full"}
     assert args.instruction == "check the API"
+    assert args.resume_instruction == "check the API"
 
 
 def test_resume_honors_scope_mode_full_without_recorded_user_instruction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Widening still takes effect when the run predates user_instruction."""
+    """A widened resume drops a preamble-only instruction and injects the note."""
     work = tmp_path / "project"
     work.mkdir()
     monkeypatch.chdir(tmp_path)
@@ -136,7 +142,38 @@ def test_resume_honors_scope_mode_full_without_recorded_user_instruction(
     args = _resume(monkeypatch, "--scope-mode", "full")
 
     assert args.diff_scope == {"active": False, "mode": "full"}
-    assert args.instruction == PREAMBLE
+    assert args.instruction is None
+    assert args.resume_instruction == RESUME_SCOPE_WIDENED_INSTRUCTION
+
+
+def test_resume_with_scope_mode_full_on_a_full_run_injects_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-asserting full on a run that was already full is a plain no-op."""
+    work = tmp_path / "project"
+    work.mkdir()
+    monkeypatch.chdir(tmp_path)
+    _write_run_record(
+        tmp_path / "strix_runs",
+        "pentest_abcd",
+        {
+            "run_name": "pentest_abcd",
+            "targets_info": [],
+            "local_sources": [],
+            "instruction": "find auth bugs",
+            "user_instruction": "find auth bugs",
+            "scan_mode": "deep",
+            "scope_mode": "full",
+            "diff_scope": {"active": False, "mode": "full"},
+            "workspace_mount": str(work),
+        },
+    )
+
+    args = _resume(monkeypatch, "--scope-mode", "full")
+
+    assert args.diff_scope == {"active": False, "mode": "full"}
+    assert args.instruction == "find auth bugs"
+    assert args.resume_instruction == ""
 
 
 @pytest.mark.parametrize("extra", [["--scope-mode", "diff"], ["--diff-base", "origin/main"]])
